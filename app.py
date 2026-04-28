@@ -1,18 +1,25 @@
 """
 株式会社イシクラ 入稿コンシェルジュアプリ
 Streamlit Community Cloud にそのままデプロイ可能。
-依存ライブラリ: streamlit のみ（requirements.txt に記載）
+依存ライブラリ: streamlit, google-generativeai
 """
 
 import streamlit as st
+import google.generativeai as genai
+
+# =============================================================================
+# ▼▼▼ 設定エリア ▼▼▼
+# =============================================================================
+
+# Gemini API Key (Streamlit Secrets または直接指定)
+# 運用時は Streamlit の Secrets (st.secrets["GEMINI_API_KEY"]) を推奨します
+GEMINI_API_KEY = "AIzaSyD2iPzPWH4SNczwJY4jV-QQPy2WgsoD__E"
 
 # =============================================================================
 # ▼▼▼ データ定義エリア ▼▼▼
 # ここを編集するだけでコンテンツを更新できます
 # =============================================================================
 
-# --- 印刷物の種類リスト ---
-# 【拡張ポイント】新しい印刷物を追加する場合はここに追記してください
 PRINT_TYPES = [
     "卒業アルバム",
     "チラシ・フライヤー",
@@ -23,7 +30,6 @@ PRINT_TYPES = [
     "その他",
 ]
 
-# --- 使用ソフトのリスト ---
 SOFTWARE_LIST = [
     "Adobe Illustrator",
     "Adobe Photoshop",
@@ -33,7 +39,6 @@ SOFTWARE_LIST = [
     "その他",
 ]
 
-# --- 入稿形式リスト ---
 FILE_FORMATS = [
     "PDF（推奨）",
     "ai（Illustratorデータ）",
@@ -43,10 +48,7 @@ FILE_FORMATS = [
     "その他",
 ]
 
-# --- 入稿フロー：印刷物の種類ごとの補足ステップ ---
-# 【拡張ポイント】印刷物の種類ごとの特有注意点をここに追記してください
-# key: PRINT_TYPES の文字列, value: 追加で表示するメモのリスト
-EXTRA_FLOW_NOTES: dict[str, list[str]] = {
+EXTRA_FLOW_NOTES = {
     "卒業アルバム": [
         "写真データは原寸 350dpi 以上を強く推奨します（特に見開きページ）",
         "個人写真の掲載許諾（プライバシー）を事前に確認してください",
@@ -76,520 +78,233 @@ EXTRA_FLOW_NOTES: dict[str, list[str]] = {
     ],
 }
 
-# --- ソフト別の追加チェック項目 ---
-# 【拡張ポイント】ソフトごとの特有チェックをここに追記してください
-EXTRA_CHECKS_BY_SOFTWARE: dict[str, list[str]] = {
+EXTRA_CHECKS_BY_SOFTWARE = {
     "Adobe Illustrator": [
         "すべてのテキストオブジェクトをアウトライン化している",
         "リンク画像をすべて埋め込み済み（またはリンクファイルを同梱）",
         "アピアランス・効果（ドロップシャドウなど）を分割・統合済み",
         "オーバープリント設定に問題がない（白オブジェクトに誤設定なし）",
-        "ドキュメントのカラーモードが CMYK になっている（ファイル→ドキュメントのカラーモード）",
+        "ドキュメントのカラーモードが CMYK になっている",
         "トリムマーク（トンボ）が正しく設定されている",
     ],
     "Adobe Photoshop": [
-        "カラーモードが CMYK になっている（イメージ→モード）",
+        "カラーモードが CMYK になっている",
         "解像度が原寸で 300〜350dpi 以上になっている",
-        "レイヤーを統合して保存している（または埋め込みスマートオブジェクトの確認）",
-        "保存形式は PDF（印刷品質）または TIFF（非圧縮）推奨",
+        "レイヤーを統合して保存している",
+        "保存形式は PDF または TIFF 推奨",
     ],
     "Adobe InDesign": [
-        "すべてのフォントをアウトライン化、またはフォントファイルを同梱している",
+        "フォントをアウトライン化、またはフォントファイルを同梱している",
         "リンクパネルでリンク切れが 0 件になっている",
-        "「パッケージ」機能でデータをまとめてから入稿している",
-        "ドキュメントのカラープロファイルが CMYK（Japan Color 2001 Coated 推奨）",
-        "ページサイズと断ち落とし（塗り足し）設定が正しい",
+        "「パッケージ」機能でデータをまとめている",
+        "カラープロファイルが CMYK",
+        "ページサイズと塗り足し設定が正しい",
     ],
     "Microsoft PowerPoint": [
-        "フォントが埋め込まれているか、または PDF に書き出して入稿している",
-        "画像解像度：PowerPoint からのエクスポートは低解像度になりやすいため担当者に相談を",
-        "カラーモードの変換は印刷会社側で行うが、見た目の色変化を了承している",
-        "※ PowerPoint データは印刷用途への変換リスクが高いため、PDF 書き出しを推奨します",
+        "フォントが埋め込まれているか、または PDF で入稿している",
+        "※ PowerPoint データの直接入稿はリスクが高いため PDF 書き出しを推奨します",
+        "カラーモードの変化（RGB→CMYK）を了承している",
     ],
     "PDF のみ（編集ソフトなし）": [
-        "PDF の規格が PDF/X-1a または PDF/X-4 になっている（推奨）",
-        "フォントが埋め込まれている（Acrobat でプロパティ確認）",
-        "カラーモードがすべて CMYK になっている（RGB 混在に注意）",
-        "塗り足しが PDF 内に含まれている",
+        "PDF 規格が PDF/X-1a または PDF/X-4 になっている",
+        "フォントが埋め込まれている",
+        "カラーモードが CMYK になっている",
     ],
 }
 
-# --- 共通チェックリスト ---
-# 【拡張ポイント】全印刷物共通の注意点をここに追記・編集してください
-COMMON_CHECKLIST: list[str] = [
+COMMON_CHECKLIST = [
     "カラーモードは CMYK になっている",
-    "仕上がりサイズで作成している（断裁後のサイズ）",
+    "仕上がりサイズで作成している",
     "塗り足し（上下左右各 3mm）が設定されている",
-    "重要な文字・ロゴが断裁位置から内側に 3mm 以上の余白を取っている",
+    "重要な文字・ロゴが断裁位置から 3mm 以上の余白を取っている",
     "画像解像度は原寸で 300〜350dpi 程度ある",
     "トンボ（トリムマーク）の設定が正しい",
-    "透明効果・グラデーションの見た目を実際の印刷物でも確認した",
+    "透明効果・グラデーションの見た目を最終確認した",
     "入稿用データと編集用データを分けて保存している",
-    "確認用 PDF を自分で開いてレイアウト崩れがないことを確認した",
-    "ファイル名に全角文字・特殊文字・スペースが含まれていない",
-    "最終版データをバックアップしている",
+    "確認用 PDF でレイアウト崩れがないことを確認した",
+    "ファイル名に全角文字・特殊文字が含まれていない",
 ]
 
-# --- FAQ データ ---
-# 【拡張ポイント】Q&A を追加・編集する場合はここに辞書を追記してください
-# key: 質問文, value: 回答文
-FAQ_DATA: list[dict[str, str]] = [
-    {
-        "q": "RGB のまま入稿するとどうなりますか？",
-        "a": (
-            "印刷時に CMYK へ自動変換されますが、変換アルゴリズムによって画面で見た色と大きく異なる場合があります。"
-            "特に鮮やかな青・緑・橙などの色は再現できない色域のため、くすんだ仕上がりになることがあります。"
-            "必ず事前に CMYK に変換し、色を確認してから入稿してください。"
-        ),
-    },
-    {
-        "q": "フォントをアウトライン化しないとどうなりますか？",
-        "a": (
-            "印刷会社の環境に同じフォントがない場合、文字化けや別フォントへの置き換えが起こります。"
-            "レイアウトが崩れたり、意図しない書体で印刷されるリスクがあります。"
-            "Illustrator・InDesign では「書式 → アウトラインを作成」で必ずアウトライン化してください。"
-        ),
-    },
-    {
-        "q": "塗り足し（断ち落とし）がないとどうなりますか？",
-        "a": (
-            "断裁は機械で行うため、わずかなズレが生じます。"
-            "塗り足しがないと、用紙の端に白い地が出てしまう可能性があります。"
-            "背景色や写真が端まである場合は、仕上がりサイズよりも上下左右各 3mm 広げて作成してください。"
-        ),
-    },
-    {
-        "q": "画像解像度はどのくらい必要ですか？",
-        "a": (
-            "印刷原稿では、原寸（使用サイズ）で 300〜350dpi が目安です。"
-            "Web 用画像（72〜96dpi）をそのまま使うと、印刷時にぼやけた仕上がりになります。"
-            "卒業アルバムの見開きページや大きな写真は 350dpi 以上を推奨します。"
-        ),
-    },
-    {
-        "q": "PDF で入稿する場合に気をつけることは？",
-        "a": (
-            "PDF 書き出し時は「PDF/X-1a」または「PDF/X-4」規格を推奨します。"
-            "フォント埋め込み・トンボ・塗り足しを含めて書き出してください。"
-            "Acrobat でプロパティを確認し、カラーモードが CMYK になっているかチェックしてください。"
-        ),
-    },
-    {
-        "q": "オーバープリントとは何ですか？なぜ注意が必要ですか？",
-        "a": (
-            "オーバープリントは、重なったオブジェクトのインクを混合させる印刷設定です。"
-            "白いオブジェクトにオーバープリントが設定されていると、印刷時に白が透けてしまい、"
-            "背景が透けて見えるトラブルが起きます。"
-            "Illustrator の「属性」パネルでオーバープリント設定を確認してください。"
-        ),
-    },
-    {
-        "q": "PowerPoint データで入稿できますか？",
-        "a": (
-            "PowerPoint データは直接入稿よりも、PDF に書き出してから入稿することを推奨します。"
-            "PowerPoint のままでは画像解像度が下がったり、フォントが置き換わるリスクがあります。"
-            "書き出し時は「印刷品質」を選択してください。カラーモードの変換は当社で対応しますが、"
-            "色味の変化についてはご了承ください。"
-        ),
-    },
-    {
-        "q": "入稿後に修正はできますか？",
-        "a": (
-            "印刷工程が進んでからの修正はお受けできない場合があります。"
-            "入稿前に必ず確認用 PDF で最終チェックを行い、問題がないことを確認してから入稿してください。"
-            "不安な点は入稿前にイシクラ担当者にご相談ください。"
-        ),
-    },
-    {
-        "q": "卒業アルバム特有の注意点はありますか？",
-        "a": (
-            "卒業アルバムは個人情報（顔写真・氏名）を扱うため、掲載許諾の管理が重要です。"
-            "また、写真品質のばらつきが目立ちやすいため、できるだけ原寸 350dpi 以上の写真を使用してください。"
-            "ページ構成（台割）と氏名の最終確認は、学校担当者と必ず行ってください。"
-        ),
-    },
+FAQ_DATA = [
+    {"q": "RGB のまま入稿するとどうなりますか？", "a": "印刷時に CMYK へ自動変換され、色がくすむ可能性があります。事前に変換して確認してください。"},
+    {"q": "フォントをアウトライン化しないとどうなりますか？", "a": "文字化けやフォントの置き換えが発生するリスクがあります。必ずアウトライン化してください。"},
+    {"q": "塗り足しがないとどうなりますか？", "a": "断裁時のズレで紙の端に白い地が出てしまう可能性があります。"},
+    {"q": "画像解像度はどのくらい必要ですか？", "a": "印刷物では原寸で 300〜350dpi が目安です。"},
 ]
 
-# --- 入稿フロー：共通ステップ ---
-# 【拡張ポイント】フローのステップを追加・変更する場合はここを編集してください
-COMMON_FLOW_STEPS: list[str] = [
-    "仕上がりサイズ・ページ数・仕様の確認（担当者への事前確認を推奨）",
-    "カラーモードを CMYK に設定する",
-    "塗り足し（通常 上下左右 3mm）を設定する",
-    "フォントのアウトライン化（Illustrator / InDesign の場合）またはフォント埋め込み確認",
-    "画像解像度の確認（原寸で 300〜350dpi 目安）",
-    "リンク画像の埋め込み、またはリンクファイルを同梱する",
-    "トンボ（トリムマーク）の設定と断裁位置の確認",
-    "重要な文字・ロゴが断裁位置から内側に十分な余白を取れているか確認（3mm 以上）",
-    "オーバープリントの設定確認（特に白オブジェクトに注意）",
-    "PDF 書き出し（印刷品質 / PDF/X-1a または PDF/X-4 推奨）",
-    "確認用 PDF を自分で開いてレイアウト・文字化けがないか最終確認",
-    "チェックリストをすべて確認してから入稿",
+COMMON_FLOW_STEPS = [
+    "仕上がり仕様の最終確認",
+    "カラーモードを CMYK に設定",
+    "塗り足し（3mm）の設定",
+    "フォントのアウトライン化・埋め込み",
+    "画像解像度の確認（300-350dpi）",
+    "リンク画像の処理（埋め込み等）",
+    "トンボ・断裁位置の確認",
+    "PDF 書き出し（PDF/X-4推奨）",
+    "セルフチェックリストの実行",
+    "担当者へ入稿連絡",
 ]
-
-# =============================================================================
-# ▲▲▲ データ定義エリア終わり ▲▲▲
-# =============================================================================
-
 
 # =============================================================================
 # デザイン・ユーティリティ
 # =============================================================================
 
 def apply_custom_style():
-    """カスタムCSSを適用してプレミアムな外観にする"""
     st.markdown("""
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
-        
-        html, body, [class*="css"] {
-            font-family: 'Noto+Sans+JP', sans-serif;
-        }
-        
-        .main {
-            background-color: #f8f9fa;
-        }
-        
-        /* タイトル・見出しのスタイル */
-        h1, h2, h3 {
-            color: #00529b; /* イシクラ・ブルー */
-            border-left: 5px solid #00529b;
-            padding-left: 15px;
-            margin-top: 1.5rem !important;
-        }
-        
-        /* サイドバー */
-        .css-1d391kg {
-            background-color: #ffffff;
-        }
-        
-        /* カード風のコンテナ */
-        .stAlert, .stCallout {
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        }
-        
-        /* ボタン */
-        .stButton > button {
-            border-radius: 20px;
-            border: 1px solid #00529b;
-            background-color: #ffffff;
-            color: #00529b;
-            transition: all 0.3s;
-        }
-        .stButton > button:hover {
-            background-color: #00529b;
-            color: #ffffff;
-        }
-        
-        /* ステップ表示 */
-        .step-container {
-            background-color: white;
-            padding: 20px;
-            border-radius: 10px;
-            border: 1px solid #e0e0e0;
-            margin-bottom: 10px;
-        }
-        .step-number {
-            display: inline-block;
-            width: 30px;
-            height: 30px;
-            background-color: #00529b;
-            color: white;
-            border-radius: 50%;
-            text-align: center;
-            line-height: 30px;
-            font-weight: bold;
-            margin-right: 10px;
-        }
+        html, body, [class*="css"] { font-family: 'Noto+Sans+JP', sans-serif; }
+        .main { background-color: #f8f9fa; }
+        h1, h2, h3 { color: #00529b; border-left: 5px solid #00529b; padding-left: 15px; margin-top: 1.5rem !important; }
+        .stButton > button { border-radius: 20px; border: 1px solid #00529b; background-color: #white; color: #00529b; }
+        .stButton > button:hover { background-color: #00529b; color: white; }
+        .step-container { background-color: white; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0; margin-bottom: 8px; }
+        .step-number { display: inline-block; width: 25px; height: 25px; background-color: #00529b; color: white; border-radius: 50%; text-align: center; line-height: 25px; font-weight: bold; margin-right: 10px; }
+        /* チャット用スタイル */
+        .chat-message { padding: 10px; border-radius: 10px; margin-bottom: 10px; }
+        .user-message { background-color: #e3f2fd; border-left: 5px solid #2196f3; }
+        .assistant-message { background-color: #f1f8e9; border-left: 5px solid #4caf50; }
         </style>
     """, unsafe_allow_html=True)
-
 
 # =============================================================================
 # ページ関数
 # =============================================================================
 
-def page_about() -> None:
-    """画面1：はじめに（イシクラについて）"""
+def page_about():
     st.title("株式会社イシクラ 入稿コンシェルジュ")
-    
-    st.markdown(
-        """
+    st.markdown("""
         <div style='padding: 20px; background-color: #e3f2fd; border-radius: 15px; border-left: 8px solid #00529b; margin-bottom: 25px;'>
             <h4 style='margin:0; color:#00529b;'>想い出をカタチに、未来へつなぐ。</h4>
-            <p style='margin-top:10px;'>株式会社イシクラは、埼玉県さいたま市を拠点に、卒業アルバムや各種印刷物の企画・制作を通じて、皆様の大切な瞬間を形にするお手伝いをしています。</p>
+            <p style='margin-top:10px;'>株式会社イシクラは、埼玉県さいたま市を拠点に、卒業アルバムや各種印刷物の制作を通じて、皆様の大切な瞬間を形にするお手伝いをしています。</p>
         </div>
-        """, unsafe_allow_html=True
-    )
-
-    st.subheader("このアプリの目的")
-    st.write("データ入稿時の「困った」を解決し、スムーズな印刷進行をサポートするためのコンシェルジュアプリです。")
-    
+    """, unsafe_allow_html=True)
+    st.subheader("このアプリでできること")
     col1, col2 = st.columns(2)
     with col1:
-        st.info("🎯 **入稿ガイド**\n\n印刷物の種類や使用ソフトに合わせた最適な制作フローをステップ形式でご案内します。")
+        st.info("🎯 **入稿フローガイド**\n\n条件に合わせて最適な制作手順をご案内します。")
+        st.info("🤖 **AIチャット相談**\n\nGemini AI が入稿の疑問にリアルタイムでお答えします。")
     with col2:
-        st.success("✅ **チェックリスト**\n\nうっかりミスを防ぐための重要項目を網羅。入稿前の最終確認にご活用ください。")
+        st.success("✅ **セルフチェックリスト**\n\nミスを未然に防ぐための確認項目を提供します。")
+        st.success("❓ **よくある質問**\n\n過去の代表的なトラブル事例と解決策を確認できます。")
 
-    st.divider()
-    
-    st.subheader("主な事業領域")
-    tabs = st.tabs(["🎓 学校向け", "🏢 企業・団体向け", "📷 写真館向け"])
-    
-    with tabs[0]:
-        st.markdown("#### 卒業アルバム・学校案内\n卒業アルバムのトップメーカーとして、撮影から製本までトータルでサポートします。")
-    with tabs[1]:
-        st.markdown("#### 商業印刷・記念誌\nパンフレット、チラシ、記念誌など、高品質な印刷物を提供します。")
-    with tabs[2]:
-        st.markdown("#### プロフェッショナル支援\n写真館やプロカメラマンの皆様のパートナーとして、最高の品質を追求します。")
-
-
-def page_flow_guide() -> None:
-    """画面2：入稿フローガイド（ウィザード形式）"""
+def page_flow_guide():
     st.title("入稿フローガイド")
-    st.markdown("以下の条件を選択してください。最適な入稿ステップが表示されます。")
-
-    with st.container():
-        st.markdown("<div style='background-color: white; padding: 25px; border-radius: 15px; border: 1px solid #eee; margin-bottom: 20px;'>", unsafe_allow_html=True)
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            print_type = st.selectbox("① 印刷物の種類", PRINT_TYPES, key="flow_print_type")
-        with col2:
-            software = st.selectbox("② 使用するソフト", SOFTWARE_LIST, key="flow_software")
-        with col3:
-            file_format = st.selectbox("③ 入稿形式", FILE_FORMATS, key="flow_format")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    st.subheader(f"📋 あなたの入稿プラン：{print_type}")
-    
-    # ステップ表示
+    col1, col2, col3 = st.columns(3)
+    with col1: print_type = st.selectbox("① 印刷物の種類", PRINT_TYPES)
+    with col2: software = st.selectbox("② 使用するソフト", SOFTWARE_LIST)
+    with col3: file_format = st.selectbox("③ 入稿形式", FILE_FORMATS)
+    st.subheader(f"📋 推奨入稿フロー：{print_type}")
     for i, step in enumerate(COMMON_FLOW_STEPS, 1):
-        st.markdown(f"""
-            <div class='step-container'>
-                <span class='step-number'>{i}</span> {step}
-            </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"<div class='step-container'><span class='step-number'>{i}</span> {step}</div>", unsafe_allow_html=True)
+    extra = EXTRA_FLOW_NOTES.get(print_type, [])
+    if extra:
+        with st.expander(f"📌 {print_type} 特有の注意点", expanded=True):
+            for note in extra: st.markdown(f"・ {note}")
 
-    # 印刷物の種類に応じた追加注意点
-    extra_notes = EXTRA_FLOW_NOTES.get(print_type, [])
-    if extra_notes:
-        with st.expander(f"📌 {print_type} 特有の重要なアドバイス", expanded=True):
-            for note in extra_notes:
-                st.markdown(f"**・ {note}**")
-
-    # ソフト別の補足
-    software_tips: dict[str, str] = {
-        "Adobe Illustrator": "フォントのアウトライン化・画像の埋め込みは Illustrator では必須作業です。",
-        "Adobe Photoshop": "Photoshop は画像データ専用です。テキストを含む場合は Illustrator や InDesign との組み合わせを推奨します。",
-        "Adobe InDesign": "InDesign の「パッケージ」機能を使うと、リンク画像・フォントをまとめて整理できます。",
-        "Microsoft PowerPoint": "PowerPoint からは PDF（印刷品質）で書き出してから入稿することを強く推奨します。",
-        "PDF のみ（編集ソフトなし）": "PDF 入稿の場合は PDF/X-1a または PDF/X-4 規格で書き出してください。",
-    }
-    tip = software_tips.get(software)
-    if tip:
-        st.info(f"💡 **{software} のワンポイント:** {tip}")
-
-
-def page_checklist() -> None:
-    """画面3：入稿チェックリスト"""
+def page_checklist():
     st.title("入稿チェックリスト")
-    st.markdown("選択した内容に基づき、入稿前に確認すべき項目をリストアップしました。")
-
     col1, col2 = st.columns(2)
-    with col1:
-        print_type = st.selectbox("対象の印刷物", PRINT_TYPES, key="check_print_type")
-    with col2:
-        software = st.selectbox("制作ソフト", SOFTWARE_LIST, key="check_software")
-
+    with col1: print_type = st.selectbox("印刷物", PRINT_TYPES)
+    with col2: software = st.selectbox("ソフト", SOFTWARE_LIST)
     st.divider()
-
-    # チェック項目の組み立て
-    all_items: list[str] = list(COMMON_CHECKLIST)
-    software_items: list[str] = EXTRA_CHECKS_BY_SOFTWARE.get(software, [])
-    
-    # 印刷物の種類ごとの追加チェック項目
-    # 【拡張ポイント】印刷物の種類ごとのチェック項目をここに追加してください
-    extra_print_checks: dict[str, list[str]] = {
-        "卒業アルバム": [
-            "個人写真の掲載許諾（プライバシー）をすべて取得済みである",
-            "ページ順・氏名表記に間違いがないか、学校側と最終確認済みである",
-            "表紙の仕様（布貼り・印刷等）が発注内容と一致している",
-            "集合写真等の重要画像が原寸で 350dpi 以上の解像度を確保している",
-        ],
-        "パンフレット・冊子": [
-            "総ページ数が 4 の倍数（中綴じ等の場合）になっている",
-            "表紙と本文のデータが区別できるように命名されている",
-        ],
-        "名刺": [
-            "仕上がりサイズ（91x55mm等）が正しく設定されている",
-            "重要な文字が断裁線から 3mm 以上内側に配置されている",
-        ],
-    }
-    extra_print = extra_print_checks.get(print_type, [])
-
-    # チェックボックスの状態を session_state で管理
-    # 選択が変わるたびにリセットされるのを防ぐため、keyを工夫
-    state_key = f"checks_{print_type}_{software}"
-    
-    # 内部での表示用
-    st.subheader("✅ セルフチェック")
-    
-    all_sections = [
-        ("🌐 共通チェック項目", COMMON_CHECKLIST),
-        (f"🛠️ {software} 固有項目", software_items),
-        (f"📌 {print_type} 固有項目", extra_print)
-    ]
-    
-    results = {}
-    
-    for section_title, items in all_sections:
-        if items:
-            st.markdown(f"**{section_title}**")
-            for item in items:
-                # 一意のキーを作成
-                item_key = f"chk_{state_key}_{item}"
-                results[item] = st.checkbox(item, key=item_key)
-            st.write("")
-
-    # チェック結果の要約
+    items = list(COMMON_CHECKLIST) + EXTRA_CHECKS_BY_SOFTWARE.get(software, [])
+    if print_type == "卒業アルバム": items += ["個人写真の掲載許諾確認", "ページ順の最終確認"]
+    results = {item: st.checkbox(item, key=f"chk_{item}") for item in items}
     st.divider()
-    checked_items = [item for item, val in results.items() if val]
-    unchecked_items = [item for item, val in results.items() if not val]
-    total_count = len(results)
-    
-    if total_count > 0:
-        progress = len(checked_items) / total_count
-        st.progress(progress)
+    checked = sum(results.values())
+    st.progress(checked / len(items))
+    if checked == len(items): st.success("🎉 全項目確認済み！入稿可能です。")
+    else: st.warning(f"残り {len(items) - checked} 項目です。")
+
+def page_ai_chat():
+    st.title("🤖 AIチャット相談 (Gemini)")
+    st.write("入稿に関する疑問や、データの作り方についてAIに相談できます。")
+
+    if not GEMINI_API_KEY:
+        st.error("APIキーが設定されていません。")
+        return
+
+    # AI設定
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+
+    # セッション状態の初期化
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    # チャット履歴の表示
+    for message in st.session_state.chat_history:
+        role_class = "user-message" if message["role"] == "user" else "assistant-message"
+        st.markdown(f"<div class='chat-message {role_class}'><b>{'あなた' if message['role'] == 'user' else 'イシクラAI'}</b>: {message['content']}</div>", unsafe_allow_html=True)
+
+    # 入力エリア
+    with st.form("chat_form", clear_on_submit=True):
+        user_input = st.text_input("質問を入力してください（例：塗り足しの設定方法は？）")
+        submit_button = st.form_submit_button("送信")
+
+    if submit_button and user_input:
+        # 履歴に追加
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
         
-        if not unchecked_items:
-            st.balloons()
-            st.success("✨ 素晴らしい！すべての項目が確認されました。入稿可能です！")
-        else:
-            st.warning(f"現在 {len(checked_items)} / {total_count} 項目完了しています。")
-            with st.expander("未完了の項目を確認する"):
-                for item in unchecked_items:
-                    st.markdown(f"- ⚠️ {item}")
+        # システムプロンプトを含むメッセージ構築
+        prompt = f"""
+        あなたは「株式会社イシクラ」の印刷入稿コンシェルジュです。
+        以下の知識をベースに、ユーザーの質問に丁寧かつプロフェッショナルに日本語で回答してください。
+        
+        【イシクラの基本知識】
+        - 埼玉県さいたま市の印刷会社。
+        - 卒業アルバムが主力製品。
+        - 入稿は CMYK 推奨、塗り足し 3mm 必須。
+        - 解像度は 300〜350dpi 推奨。
+        - フォントはアウトライン化を推奨。
+        
+        ユーザーの質問: {user_input}
+        """
+        
+        with st.spinner("AIが回答を生成中..."):
+            try:
+                response = model.generate_content(prompt)
+                ai_response = response.text
+                st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
+                st.rerun()
+            except Exception as e:
+                st.error(f"エラーが発生しました: {e}")
 
-
-def page_faq() -> None:
-    """画面4：よくある質問（FAQ）"""
+def page_faq():
     st.title("よくある質問（FAQ）")
-    st.markdown("制作や入稿時によくあるトラブルと、その対策についてまとめました。")
+    for faq in FAQ_DATA:
+        with st.expander(faq["q"]): st.write(faq["a"])
 
-    # 検索機能
-    search_query = st.text_input("キーワードで検索", placeholder="例：RGB, 解像度...")
-
-    for i, faq in enumerate(FAQ_DATA):
-        if search_query.lower() in faq['q'].lower() or search_query.lower() in faq['a'].lower():
-            with st.expander(f"Q{i + 1}：{faq['q']}"):
-                st.markdown(f"**A：** {faq['a']}")
-
-    st.divider()
-    st.info("疑問が解決しない場合は、イシクラ担当者までお電話またはメールにてお気軽にご相談ください。")
-
-
-def page_contact() -> None:
-    """画面5：お問い合わせ案内"""
+def page_contact():
     st.title("お問い合わせ案内")
-
-    st.warning(
-        "**【重要】**\n\n"
-        "本アプリは入稿準備を補助するためのガイドです。実際の入稿可否や仕様の最終判断については、必ず当社担当者と直接お打ち合わせください。"
-    )
-
-    st.subheader("お問い合わせ窓口")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("""
-        #### 📞 お電話
-        **048-XXX-XXXX** (仮)  
-        受付時間：平日 9:00 〜 17:00  
-        *※土日祝、弊社指定休業日を除く*
-        """)
-    with col2:
-        st.markdown("""
-        #### 📧 Webから
-        [お問い合わせフォームはこちら](https://www.ishikura.co.jp/)  
-        24時間受付（回答は営業時間内となります）
-        """)
-
-    st.divider()
-    
-    st.subheader("会社情報")
     st.markdown("""
-    | 項目 | 内容 |
-    | :--- | :--- |
-    | **会社名** | 株式会社イシクラ |
-    | **所在地** | 埼玉県さいたま市岩槻区古ヶ場 1-6-11 |
-    | **設立** | 19XX年（詳細は公式サイトへ） |
-    | **事業内容** | 卒業アルバム制作、各種商業印刷、企画デザイン |
+        #### 📞 お電話
+        **048-794-XXXX** (代表)  
+        受付：平日 9:00 〜 17:00
+        #### 🌐 Webサイト
+        [https://www.ishikura.co.jp/](https://www.ishikura.co.jp/)
     """)
-    
-    # アクセス（簡易表示）
-    st.markdown("---")
-    st.markdown("📍 [Googleマップで開く](https://www.google.com/maps/search/?api=1&query=埼玉県さいたま市岩槻区古ヶ場1-6-11)")
-
 
 # =============================================================================
-# メインアプリ
+# メイン
 # =============================================================================
 
-def main() -> None:
-    st.set_page_config(
-        page_title="イシクラ 入稿コンシェルジュ",
-        page_icon="🖨️",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
-
-    # カスタムCSSの適用
+def main():
+    st.set_page_config(page_title="イシクラ 入稿コンシェルジュ", page_icon="🖨️", layout="wide")
     apply_custom_style()
-
-    # --- サイドバー ---
     with st.sidebar:
-        # ロゴ（テキスト）
-        st.markdown(
-            """
-            <div style='text-align: left; padding-bottom: 20px;'>
-                <h2 style='border:none; padding:0; margin:0; color:#00529b;'>ISHIKURA</h2>
-                <small style='color:#666;'>CONCIERGE APP</small>
-            </div>
-            """, unsafe_allow_html=True
-        )
-        
-        st.write("---")
-        
-        # ナビゲーション
-        page = st.radio(
-            "メニューを選択してください",
-            options=[
-                "はじめに（イシクラについて）",
-                "入稿フローガイド",
-                "入稿チェックリスト",
-                "よくある質問（FAQ）",
-                "お問い合わせ案内",
-            ],
-            label_visibility="visible"
-        )
-
-        st.write("---")
+        st.markdown("<h2 style='color:#00529b;'>ISHIKURA</h2>", unsafe_allow_html=True)
+        page = st.radio("メニュー", ["はじめに", "入稿フローガイド", "AIチャット相談", "チェックリスト", "FAQ", "お問い合わせ"])
+        st.divider()
         st.caption("© 株式会社イシクラ")
-        st.caption("v1.0.0 (Standard Edition)")
 
-    # --- ページルーティング ---
-    if page == "はじめに（イシクラについて）":
-        page_about()
-    elif page == "入稿フローガイド":
-        page_flow_guide()
-    elif page == "入稿チェックリスト":
-        page_checklist()
-    elif page == "よくある質問（FAQ）":
-        page_faq()
-    elif page == "お問い合わせ案内":
-        page_contact()
-
+    if page == "はじめに": page_about()
+    elif page == "入稿フローガイド": page_flow_guide()
+    elif page == "AIチャット相談": page_ai_chat()
+    elif page == "チェックリスト": page_checklist()
+    elif page == "FAQ": page_faq()
+    elif page == "お問い合わせ": page_contact()
 
 if __name__ == "__main__":
     main()
