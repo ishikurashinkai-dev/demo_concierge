@@ -227,7 +227,7 @@ def page_ai_chat():
 
     # AI設定
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    model = genai.GenerativeModel('gemini-pro')
 
     # セッション状態の初期化
     if "chat_history" not in st.session_state:
