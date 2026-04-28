@@ -235,41 +235,28 @@ def page_ai_chat():
 
     # チャット履歴の表示
     for message in st.session_state.chat_history:
-        role_class = "user-message" if message["role"] == "user" else "assistant-message"
-        st.markdown(f"<div class='chat-message {role_class}'><b>{'あなた' if message['role'] == 'user' else 'イシクラAI'}</b>: {message['content']}</div>", unsafe_allow_html=True)
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
     # 入力エリア
-    with st.form("chat_form", clear_on_submit=True):
-        user_input = st.text_input("質問を入力してください（例：塗り足しの設定方法は？）")
-        submit_button = st.form_submit_button("送信")
-
-    if submit_button and user_input:
-        # 履歴に追加
-        st.session_state.chat_history.append({"role": "user", "content": user_input})
+    if prompt := st.chat_input("質問を入力してください（例：塗り足しの設定方法は？）"):
+        # ユーザーの入力を表示・保存
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        st.session_state.chat_history.append({"role": "user", "content": prompt})
         
-        # システムプロンプトを含むメッセージ構築
-        prompt = f"""
-        あなたは「株式会社イシクラ」の印刷入稿コンシェルジュです。
-        以下の知識をベースに、ユーザーの質問に丁寧かつプロフェッショナルに日本語で回答してください。
-        
-        【イシクラの基本知識】
-        - 埼玉県さいたま市の印刷会社。
-        - 卒業アルバムが主力製品。
-        - 入稿は CMYK 推奨、塗り足し 3mm 必須。
-        - 解像度は 300〜350dpi 推奨。
-        - フォントはアウトライン化を推奨。
-        
-        ユーザーの質問: {user_input}
-        """
-        
-        with st.spinner("AIが回答を生成中..."):
-            try:
-                response = model.generate_content(prompt)
-                ai_response = response.text
-                st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
-                st.rerun()
-            except Exception as e:
-                st.error(f"エラーが発生しました: {e}")
+        # AIの回答生成
+        with st.chat_message("assistant"):
+            with st.spinner("考え中..."):
+                try:
+                    # システムプロンプトを注入
+                    full_prompt = f"あなたは株式会社イシクラの印刷コンシェルジュです。入稿ルール（CMYK推奨、塗り足し3mm、解像度350dpi）に基づき、日本語で親切に回答してください。質問：{prompt}"
+                    response = model.generate_content(full_prompt)
+                    ai_response = response.text
+                    st.markdown(ai_response)
+                    st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
+                except Exception as e:
+                    st.error(f"エラーが発生しました: {e}")
 
 def page_faq():
     st.title("よくある質問（FAQ）")
