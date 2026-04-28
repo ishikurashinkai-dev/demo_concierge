@@ -13,7 +13,7 @@ import google.generativeai as genai
 
 # Gemini API Key (Streamlit Secrets または直接指定)
 # 運用時は Streamlit の Secrets (st.secrets["GEMINI_API_KEY"]) を推奨します
-GEMINI_API_KEY = "AIzaSyD2iPzPWH4SNczwJY4jV-QQPy2WgsoD__E"
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 # =============================================================================
 # ▼▼▼ データ定義エリア ▼▼▼
